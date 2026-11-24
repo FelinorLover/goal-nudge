@@ -15,7 +15,7 @@
 </head>
 <body>
   <h1>Goal Nudge</h1>
-  <p class="hint">Everything is stored locally in this browser.</p>
+  <p class="hint">Settings sync through your browser account when available. Your API key, pause and stats stay on this device.</p>
 
   <h2>Goals</h2>
   <p class="hint">One per line. These are what the overlay shows you.</p>
@@ -61,6 +61,27 @@
     </div>
   </div>
 
+  <h2>Friction</h2>
+  <label class="inline"><input type="checkbox" id="escalate"> Escalate</label>
+  <p class="hint" style="margin-top:4px">Each Continue today makes that site's countdown longer (it doubles every time, up to the cap).</p>
+  <div class="row" style="margin-top:8px">
+    <div>
+      <p class="hint">Longest countdown, seconds</p>
+      <input type="number" id="maxDelaySeconds" min="5" max="600">
+    </div>
+    <div>
+      <p class="hint">Minimum reason length, characters</p>
+      <input type="number" id="minReasonChars" min="1" max="200">
+    </div>
+  </div>
+  <label class="inline" style="margin-top:10px"><input type="checkbox" id="requireReason"> Require a typed reason to continue</label>
+
+  <h2>Daily budgets</h2>
+  <p class="hint">One <code>site minutes</code> per line, e.g. <code>youtube.com 30</code>. The site must also be in the distracting list above. Once a budget is used up, the overlay appears every time.</p>
+  <textarea id="budgets" style="min-height:64px" placeholder="youtube.com 30"></textarea>
+  <p class="hint" style="margin-top:10px">Today</p>
+  <div id="budgetToday"></div>
+
   <h2>Only nag during these hours</h2>
   <label class="inline"><input type="checkbox" id="whEnabled"> Enabled</label>
   <div class="row" style="margin-top:8px">
@@ -70,13 +91,26 @@
   <div id="days" style="margin-top:8px"></div>
 
   <div style="margin-top:28px">
-    <button id="save">Save</button><span id="saved">Saved</span>
+    <button id="save">Save</button><span id="saved">Saved</span><span id="saveErr" class="err" hidden></span>
   </div>
 
   <h2>Stats</h2>
   <p id="totals" class="hint"></p>
   <table id="byDomain"></table>
   <button class="ghost" id="resetStats" style="margin-top:8px">Reset stats</button>
+
+  <h2>Recent reasons</h2>
+  <ul id="reasons" class="plain"></ul>
+
+  <h2>Backup</h2>
+  <p class="hint">Export your settings to a file, or import one made on another browser.</p>
+  <div class="btnrow">
+    <button class="ghost" id="exportBtn">Export settings</button>
+    <input type="file" id="importFile" accept=".json,application/json">
+    <button class="ghost" id="importBtn">Import settings</button>
+  </div>
+  <p class="hint" style="margin-top:8px">The API key and pause are not exported.</p>
+  <p id="backupMsg" class="msg" hidden></p>
 
   <script src="defaults.js"></script>
   <script src="options.js"></script>

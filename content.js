@@ -5,6 +5,27 @@ const browser = globalThis.browser ?? globalThis.chrome;
 
 let host = null;
 let timer = null;
+let trackTimer = null;
+
+// Time-tracking heartbeat for daily budgets. Only the background's `track` flag
+// (via the message handler) turns this on or off; hide() never touches it.
+function setTracking(on) {
+  if (!on) {
+    if (trackTimer) clearInterval(trackTimer);
+    trackTimer = null;
+    return;
+  }
+  if (trackTimer) return; // already running, don't stack
+  trackTimer = setInterval(() => {
+    if (document.hidden || host) return;
+    try {
+      const p = browser.runtime.sendMessage({ type: "tick", seconds: 10 });
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } catch (e) {
+      // extension context gone (reloaded/updated); nothing to do
+    }
+  }, 10000);
+}
 
 function hide() {
   if (timer) clearInterval(timer);
@@ -14,8 +35,10 @@ function hide() {
   document.documentElement.style.overflow = "";
 }
 
-function show({ goals, delaySeconds, domain, cooldownMinutes, note }) {
+function show({ goals, delaySeconds, domain, cooldownMinutes, note, requireReason, minReasonChars }) {
   if (host) return; // already up
+  const needReason = !!requireReason;
+  const minChars = Math.max(1, Number(minReasonChars) || 8);
   for (const v of document.querySelectorAll("video")) v.pause();
   host = document.createElement("div");
   host.id = "goal-nudge-host";
@@ -53,6 +76,16 @@ function show({ goals, delaySeconds, domain, cooldownMinutes, note }) {
       .ghost { background: transparent; color: #9ca3af; border: 1px solid #374151; }
       .ghost:hover:not(:disabled) { color: #e5e7eb; border-color: #6b7280; }
       .ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+      textarea {
+        display: block; width: 100%; box-sizing: border-box; min-height: 76px;
+        margin: 0 0 16px; padding: 12px 14px; resize: vertical;
+        border-radius: 8px; border: 1px solid #374151;
+        background: rgba(255,255,255,0.05); color: #e5e7eb;
+        font-family: inherit; font-size: 15px; line-height: 1.4;
+      }
+      textarea::placeholder { color: #6b7280; }
+      textarea:focus { outline: none; border-color: #f59e0b; }
+      .primary:disabled, .ghost:disabled { opacity: 0.4; cursor: not-allowed; }
       .foot { margin-top: 18px; font-size: 12px; color: #6b7280; text-align: center; }
     </style>
     <div class="backdrop">
@@ -60,6 +93,7 @@ function show({ goals, delaySeconds, domain, cooldownMinutes, note }) {
         <h1>Are you sure?</h1>
         <p class="sub">You're on <b>${escapeHtml(domain)}</b>.${note ? ` <i>${escapeHtml(note)}</i>` : ""} You said you wanted to:</p>
         <ul>${goals.map((g) => `<li>${escapeHtml(g)}</li>`).join("")}</ul>
+        ${needReason ? `<textarea id="reason" rows="3" autocomplete="off" spellcheck="true" placeholder="Why are you continuing? (at least ${minChars} characters)"></textarea>` : ""}
         <div class="row">
           <button class="primary" id="close">Close this tab</button>
           <button class="ghost" id="continue" disabled>Continue anyway (${delaySeconds})</button>
@@ -69,21 +103,52 @@ function show({ goals, delaySeconds, domain, cooldownMinutes, note }) {
     </div>`;
 
   const cont = root.getElementById("continue");
+  const reasonEl = needReason ? root.getElementById("reason") : null;
   let left = delaySeconds;
-  timer = setInterval(() => {
-    left -= 1;
-    if (left <= 0) {
-      clearInterval(timer);
-      timer = null;
+  let counting = left > 0;
+
+  const reasonOk = () => !needReason || reasonEl.value.trim().length >= minChars;
+  const refresh = () => {
+    if (counting) {
+      cont.disabled = true;
+      cont.textContent = `Continue anyway (${left})`;
+    } else if (!reasonOk()) {
+      cont.disabled = true;
+      cont.textContent = "Type a reason to continue";
+    } else {
       cont.disabled = false;
       cont.textContent = "Continue anyway";
-    } else {
-      cont.textContent = `Continue anyway (${left})`;
     }
-  }, 1000);
+  };
+  refresh();
+
+  if (counting) {
+    timer = setInterval(() => {
+      left -= 1;
+      if (left <= 0) {
+        clearInterval(timer);
+        timer = null;
+        counting = false;
+      }
+      refresh();
+    }, 1000);
+  }
+
+  if (reasonEl) {
+    reasonEl.addEventListener("input", refresh);
+    // Pages (YouTube etc.) bind single-key shortcuts; keep typing inside the overlay.
+    for (const type of ["keydown", "keyup", "keypress"]) {
+      root.addEventListener(type, (e) => e.stopPropagation());
+    }
+  }
 
   cont.addEventListener("click", () => {
-    browser.runtime.sendMessage({ type: "continue", domain, cooldownMinutes, url: location.href });
+    if (cont.disabled) return;
+    const reason = needReason ? reasonEl.value.trim() : "";
+    try {
+      const p = browser.runtime.sendMessage({ type: "continue", domain, cooldownMinutes, url: location.href, reason });
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } catch (e) {}
     hide();
   });
   root.getElementById("close").addEventListener("click", () => {
@@ -92,6 +157,7 @@ function show({ goals, delaySeconds, domain, cooldownMinutes, note }) {
 
   document.documentElement.style.overflow = "hidden";
   document.documentElement.appendChild(host);
+  if (reasonEl) reasonEl.focus();
   browser.runtime.sendMessage({ type: "shown", domain });
 }
 
@@ -111,9 +177,13 @@ async function describe() {
 }
 
 browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === "show") show(msg);
-  else if (msg.type === "hide") hide();
-  else if (msg.type === "describe") {
+  if (msg.type === "show") {
+    show(msg);
+    setTracking(!!msg.track);
+  } else if (msg.type === "hide") {
+    hide();
+    setTracking(!!msg.track);
+  } else if (msg.type === "describe") {
     describe().then(sendResponse);
     return true; // async response
   }

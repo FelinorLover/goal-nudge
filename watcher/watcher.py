@@ -13,6 +13,7 @@ goals / pause state here, keeping the two in sync.  Stdlib only.
 Run:  pythonw watcher.py            (silent, for startup)
       python  watcher.py --monitor 1   (visible console, overlay on 2nd monitor)
       python  watcher.py --demo        (show the overlay once and exit)
+      python  watcher.py --demo --demo-reason   (same, with the typed-reason box forced on)
 """
 
 import argparse
@@ -34,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # Next to the script, or next to the .exe when packaged with PyInstaller.
 HERE = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
+REASONS_PATH = os.path.join(HERE, "reasons.log")
 
 DEFAULTS = {
     "goals": [
@@ -60,6 +62,12 @@ DEFAULTS = {
     # appid -> True if it's a tool. Filled in from the Steam store, cached forever.
     "steam_is_tool": {},
     "delay_seconds": 5,
+    # Each "Continue anyway" today on the same trigger doubles the countdown, up to the cap.
+    "escalate": True,
+    "max_delay_seconds": 120,
+    # Make "Continue anyway" need a typed reason (logged to reasons.log).
+    "require_reason": False,
+    "min_reason_chars": 8,
     "cooldown_minutes": 15,
     # After "I'll leave the call": how long before it checks whether you actually did.
     "leave_grace_minutes": 2,
@@ -88,6 +96,26 @@ def load_config():
 def save_config():
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
+
+
+def compute_delay(base, escalate, max_delay, continues_today):
+    """Countdown length: doubles with every "Continue anyway" today, capped at max_delay."""
+    base = float(base)
+    if base <= 0:
+        return 0
+    if not escalate:
+        return int(base)
+    return int(min(max_delay, base * 2 ** min(int(continues_today), 30)))
+
+
+def log_reason(trigger, reason):
+    """Append one JSON line per typed reason, next to config.json."""
+    entry = {"t": int(time.time() * 1000), "kind": trigger["kind"], "label": trigger["label"], "reason": reason}
+    try:
+        with open(REASONS_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print("could not write reasons.log:", e, file=sys.stderr)
 
 
 # --------------------------------------------------------------------------- #
@@ -416,9 +444,12 @@ def overlay_bounds():
 class Overlay:
     BG, CARD, FG, MUTED, ACCENT = "#0a0c12", "#141824", "#e5e7eb", "#9ca3af", "#f59e0b"
 
-    def __init__(self, root, trigger, on_continue, on_stop):
+    def __init__(self, root, trigger, on_continue, on_stop, delay=None):
         self.trigger, self.on_continue, self.on_stop = trigger, on_continue, on_stop
-        self.left = config["delay_seconds"]
+        self.left = int(config["delay_seconds"] if delay is None else delay)
+        self.need_reason = bool(config["require_reason"])
+        self.min_chars = max(1, int(config["min_reason_chars"]))
+        self.entry = None
         x, y, w, h = overlay_bounds()
 
         self.win = tk.Toplevel(root, bg=self.BG)
@@ -441,6 +472,16 @@ class Overlay:
             tk.Label(row, text=g, font=("Segoe UI", 13), fg=self.FG, bg=self.CARD, wraplength=520,
                      justify="left", padx=14, pady=10).pack(side="left", fill="x")
 
+        if self.need_reason:
+            tk.Label(card, text=f"Why are you continuing? (at least {self.min_chars} characters)",
+                     font=("Segoe UI", 11), fg=self.MUTED, bg=self.BG, anchor="w").pack(fill="x", pady=(18, 6))
+            self.entry = tk.Entry(card, font=("Segoe UI", 13), bg=self.CARD, fg=self.FG, insertbackground=self.FG,
+                                  relief="flat", highlightthickness=1, highlightbackground="#2a3042",
+                                  highlightcolor=self.ACCENT)
+            self.entry.pack(fill="x", ipady=8)
+            self.entry.bind("<KeyRelease>", lambda e: self._refresh())
+            self.entry.bind("<Return>", lambda e: self._continue())
+
         btns = tk.Frame(card, bg=self.BG)
         btns.pack(fill="x", pady=(24, 0))
         stop_text = "I'll leave the call" if trigger["kind"] == "voice" else "Quit the game"
@@ -448,7 +489,7 @@ class Overlay:
                                   bg=self.ACCENT, fg="#111827", activebackground="#fbbf24", relief="flat",
                                   cursor="hand2", pady=10)
         self.stop_btn.pack(side="left", expand=True, fill="x", padx=(0, 6))
-        self.cont_btn = tk.Button(btns, text=f"Continue anyway ({self.left})", command=self._continue,
+        self.cont_btn = tk.Button(btns, text="Continue anyway", command=self._continue,
                                   font=("Segoe UI", 12), bg=self.BG, fg=self.MUTED, disabledforeground="#4b5563",
                                   activebackground=self.CARD, relief="solid", bd=1, state="disabled", pady=10)
         self.cont_btn.pack(side="left", expand=True, fill="x", padx=(6, 0))
@@ -460,21 +501,41 @@ class Overlay:
 
         self.win.lift()
         self.win.focus_force()
+        if self.entry is not None:
+            self.entry.focus_force()
         if config["beep"]:
             winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
         self._tick()
 
-    def _tick(self):
-        if self.left <= 0:
+    def _reason(self):
+        return self.entry.get().strip() if self.entry is not None else ""
+
+    def _ready(self):
+        return self.left <= 0 and (not self.need_reason or len(self._reason()) >= self.min_chars)
+
+    def _refresh(self):
+        if self.left > 0:
+            self.cont_btn.config(state="disabled", text=f"Continue anyway ({self.left})", fg=self.MUTED)
+        elif not self._ready():
+            self.cont_btn.config(state="disabled", text="Type a reason to continue", fg=self.MUTED)
+        else:
             self.cont_btn.config(state="normal", text="Continue anyway", fg=self.FG)
-            return
-        self.cont_btn.config(text=f"Continue anyway ({self.left})")
+
+    def _tick(self):
+        self._refresh()
+        if self.left > 0:
+            self.win.after(1000, self._countdown)
+
+    def _countdown(self):
         self.left -= 1
-        self.win.after(1000, self._tick)
+        self._tick()
 
     def _continue(self):
+        if not self._ready():
+            return
+        reason = self._reason() if self.need_reason else None
         self.close()
-        self.on_continue(self.trigger)
+        self.on_continue(self.trigger, reason)
 
     def _stop(self):
         self.close()
@@ -497,6 +558,8 @@ class Watcher:
         self.overlay = None
         self.cooldowns = {}   # key -> expiry timestamp
         self.last_seen = {}   # key -> last time the trigger was active
+        self.continues = {}   # key -> "Continue anyway" clicks today (resets when the date changes)
+        self.continues_date = time.strftime("%Y-%m-%d")
         self.root.after(500, self.poll)
 
     def poll(self):
@@ -529,12 +592,24 @@ class Watcher:
         for t in triggers:
             if self.cooldowns.get(t["key"], 0) > now:
                 continue
-            self.overlay = Overlay(self.root, t, self.on_continue, self.on_stop)
-            print(f"nudge: {t['label']}")
+            self._roll_day()
+            delay = compute_delay(config["delay_seconds"], config["escalate"], config["max_delay_seconds"],
+                                  self.continues.get(t["key"], 0))
+            self.overlay = Overlay(self.root, t, self.on_continue, self.on_stop, delay)
+            print(f"nudge: {t['label']} (countdown {delay}s)")
             return
 
-    def on_continue(self, t):
+    def _roll_day(self):
+        today = time.strftime("%Y-%m-%d")
+        if today != self.continues_date:
+            self.continues_date, self.continues = today, {}
+
+    def on_continue(self, t, reason=None):
         self.overlay = None
+        self._roll_day()
+        self.continues[t["key"]] = self.continues.get(t["key"], 0) + 1
+        if reason is not None:
+            log_reason(t, reason)
         self.cooldowns[t["key"]] = time.time() + config["cooldown_minutes"] * 60
 
     def on_stop(self, t):
@@ -553,7 +628,9 @@ class Watcher:
 SYNCED = {"goals": "goals", "pausedUntil": "paused_until", "workHours": "work_hours",
           "delaySeconds": "delay_seconds", "cooldownMinutes": "cooldown_minutes",
           "watchDiscordVoice": "watch_discord_voice", "watchSteam": "watch_steam",
-          "steamAllow": "steam_allow", "games": "games"}
+          "steamAllow": "steam_allow", "games": "games",
+          "escalate": "escalate", "maxDelaySeconds": "max_delay_seconds",
+          "requireReason": "require_reason", "minReasonChars": "min_reason_chars"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -626,6 +703,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--monitor", type=int, help="0-based monitor index for the overlay (overrides config)")
     ap.add_argument("--demo", action="store_true", help="show the overlay once and exit")
+    ap.add_argument("--demo-reason", action="store_true", help="with --demo: force the typed-reason box on")
     ap.add_argument("--install-startup", action="store_true", help="add a Startup-folder shortcut so this runs at login")
     args = ap.parse_args()
 
@@ -641,13 +719,16 @@ def main():
     load_config()
     if args.monitor is not None:
         config["overlay_monitor"] = args.monitor
+    if args.demo_reason:
+        config["require_reason"] = True  # in memory only; never saved
 
     root = tk.Tk()
     root.withdraw()
 
     if args.demo:
         t = {"key": "demo", "kind": "voice", "label": "joined a voice call on Discord", "pids": []}
-        Overlay(root, t, lambda t: root.destroy(), lambda t: root.destroy())
+        Overlay(root, t, lambda t, reason=None: root.destroy(), lambda t: root.destroy(),
+                compute_delay(config["delay_seconds"], config["escalate"], config["max_delay_seconds"], 0))
         root.mainloop()
         return
 

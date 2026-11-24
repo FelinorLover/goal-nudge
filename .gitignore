@@ -6,3 +6,7 @@ dist/
 watcher/build/
 __pycache__/
 *.pyc
+
+# Typed reasons log
+reasons.log
+watcher/reasons.log

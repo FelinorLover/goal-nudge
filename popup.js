@@ -8,6 +8,23 @@ function pauseLabel(until) {
   return sameDay ? `until ${time}` : `until ${d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}, ${time}`;
 }
 
+const fmtMin = (sec) => Math.round((sec / 60) * 10) / 10;
+
+async function renderToday(s) {
+  const entries = Object.entries(s.budgets || {});
+  $("today").hidden = !entries.length;
+  if (!entries.length) return;
+  let seconds = {};
+  try { seconds = (await loadUsage()).seconds || {}; } catch (e) {}
+  $("todayList").innerHTML = entries
+    .map(([d, limit]) => {
+      const used = seconds[d] || 0;
+      const over = used / 60 >= limit;
+      return `<div class="budget-row"><span>${esc(d)}</span><span class="${over ? "over" : ""}">${fmtMin(used)} / ${esc(limit)} min</span></div>`;
+    })
+    .join("");
+}
+
 async function render() {
   const s = await loadSettings();
   const paused = Date.now() < s.pausedUntil;
@@ -20,6 +37,7 @@ async function render() {
   $("goals").innerHTML = s.goals.length
     ? s.goals.map((g) => `<li>${esc(g)}</li>`).join("")
     : `<li class="empty">No goals yet — add some in Settings</li>`;
+  renderToday(s);
 }
 
 async function setPause(until) {

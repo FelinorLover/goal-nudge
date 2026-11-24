@@ -14,6 +14,9 @@
     .actions button { flex: 1; padding: 8px 6px; font-size: 13px; }
     .pauses { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
     .pauses button { flex: 1 1 calc(33% - 4px); padding: 7px 4px; font-size: 12px; }
+    #today { margin: -6px 0 14px; }
+    #today h2 { margin: 0 0 4px; font-size: 11px; }
+    #today .budget-row { padding: 3px 0; font-size: 12px; }
     #resume { width: 100%; margin-bottom: 8px; }
   </style>
 </head>
@@ -21,6 +24,10 @@
   <h1>Goal Nudge</h1>
   <p class="status" id="status"></p>
   <ul id="goals"></ul>
+  <div id="today" hidden>
+    <h2>Today</h2>
+    <div id="todayList"></div>
+  </div>
   <div class="pauses" id="pauses">
     <button class="ghost" data-minutes="30">30m</button>
     <button class="ghost" data-minutes="60">1h</button>

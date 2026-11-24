@@ -12,6 +12,19 @@ full-page overlay shows the goals and asks whether you'd rather work on them.
 - Optional "only during these hours" schedule, and an allow-list for URLs you
   need (a specific channel, a subreddit).
 - Stats: how often it fired and what you chose, per site.
+- **Escalating friction** — every "Continue anyway" today on a site makes that
+  site's next countdown longer (5s → 10s → 20s → … capped at 2 min by default).
+  Resets at midnight.
+- **Daily budgets** — give a site minutes per day (`youtube.com 30`). Only time
+  on pages that *would* have nagged counts (educational YouTube doesn't). Once
+  it's used up the overlay returns and "Continue anyway" only buys 5 minutes.
+- **Type a reason to continue** (optional) — Continue stays locked until you've
+  typed a few words; reasons are listed in Settings so you can read them back.
+- **Export / import** settings as a JSON file. The API key and pause state are
+  never exported.
+- **Synced settings** — goals, sites, budgets etc. live in `storage.sync`, so
+  they follow your browser account across machines. The API key, pause state,
+  stats and usage stay on the device.
 - **Smart YouTube** — watch pages are judged before the overlay appears.
   Free by default: the extension reads YouTube's own category (Education,
   Gaming, Entertainment…), tags and description from the watch page and
@@ -76,6 +89,9 @@ folder contents and sign it unlisted on AMO — the steps are in
 - Discord voice watching, game watching, the Steam allow list and the non-Steam
   game list are all toggles on the extension's settings page (**Desktop
   watcher**), pushed to the watcher when you save.
+- Escalating friction and the optional typed reason work in the watcher too
+  (reasons are appended to `reasons.log` next to the exe/script). Daily budgets
+  are browser-only.
 - Same countdown / cooldown / pause / work-hours rules as the extension. The
   extension pushes goals, pause and timing to `http://127.0.0.1:47831/settings`
   whenever you save or pause, so you only edit them in one place. `config.json`
@@ -112,5 +128,4 @@ still hear the beep. Borderless/windowed is fine.
 
 ## Ideas for later
 
-- Require typing a reason to continue.
-- Per-site daily budget instead of a flat cooldown.
+- macOS / Linux watcher (currently Windows-only: registry, WASAPI, Win32).

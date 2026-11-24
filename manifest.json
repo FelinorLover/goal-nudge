@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Goal Nudge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Write down your goals. When you open a distracting site, it asks whether you'd rather work towards them.",
   "browser_specific_settings": {
     "gecko": {

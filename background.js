@@ -12,12 +12,40 @@ async function getCooldowns() {
   return cooldowns;
 }
 
-async function setCooldown(key, until) {
+// Chrome's worker can run several async handlers at once. Every read-modify-write of local
+// usage / cooldowns / stats / reasonLog goes through this promise chain so updates can't clobber each other.
+let storageLock = Promise.resolve();
+function withLock(fn) {
+  const run = storageLock.then(fn);
+  storageLock = run.catch(() => {});
+  return run;
+}
+
+// Callers hold the lock.
+async function setCooldownRaw(key, until) {
   const cooldowns = await getCooldowns();
   const now = Date.now();
   for (const k of Object.keys(cooldowns)) if (cooldowns[k] < now) delete cooldowns[k];
   cooldowns[key] = until;
   await browser.storage.local.set({ cooldowns });
+}
+
+async function clearCooldownRaw(key) {
+  const cooldowns = await getCooldowns();
+  if (!(key in cooldowns)) return;
+  delete cooldowns[key];
+  await browser.storage.local.set({ cooldowns });
+}
+
+// YouTube is judged per video, so a cooldown only clears that video (or the home feed / Shorts),
+// never the whole site. Everything else cools down per trigger domain.
+function cooldownKey(trigger, url) {
+  if (trigger !== "youtube.com") return trigger;
+  try {
+    return youtubeKey(url);
+  } catch {
+    return trigger;
+  }
 }
 
 function hostOf(url) {
@@ -47,33 +75,65 @@ function insideWorkHours(wh, now = new Date()) {
   return start <= end ? mins >= start && mins < end : mins >= start || mins < end;
 }
 
-async function evaluate(tabId, url) {
-  if (!url || !/^https?:/.test(url)) return;
-  const s = await loadSettings();
-  const cooldowns = await getCooldowns();
-  const host = hostOf(url);
-  const trigger = matchedTrigger(host, s.triggers);
-
-  let suppress =
+// Would this page nag if no cooldown applied? Returns null when the tab moved on while we were classifying.
+async function classify(tabId, url, s) {
+  const trigger = matchedTrigger(hostOf(url), s.triggers);
+  const inactive =
     !trigger ||
     Date.now() < s.pausedUntil ||
     !insideWorkHours(s.workHours) ||
-    isAllowed(url, s.allow) ||
-    (cooldowns[trigger] || 0) > Date.now();
-
+    isAllowed(url, s.allow);
+  let wouldNag = !inactive;
   let note = "";
-  if (!suppress && trigger === "youtube.com" && s.smartYouTube) {
-    const verdict = await youtubeVerdict(tabId, url, s, cooldowns);
+  if (wouldNag && trigger === "youtube.com" && s.smartYouTube) {
+    const verdict = await youtubeVerdict(tabId, url, s);
     // The tab may have moved on while we were classifying; a newer evaluate() owns it now.
     const tab = await browser.tabs.get(tabId).catch(() => null);
-    if (!tab || tab.url !== url) return;
-    suppress = !verdict.nag;
+    if (!tab || tab.url !== url) return null;
+    wouldNag = verdict.nag;
     note = verdict.note || "";
   }
+  return { trigger, wouldNag, note };
+}
 
+// delay = min(maxDelaySeconds, delaySeconds * 2 ** continuesToday); 0 stays 0.
+function escalatedDelay(s, continues) {
+  if (!s.escalate) return s.delaySeconds;
+  return Math.min(s.maxDelaySeconds, s.delaySeconds * 2 ** continues);
+}
+
+async function evaluate(tabId, url) {
+  if (!url || !/^https?:/.test(url)) return;
+  const s = await loadSettings();
+  const c = await classify(tabId, url, s);
+  if (!c) return;
+  const { trigger, wouldNag } = c;
+  let { note } = c;
+
+  const cooldowns = await getCooldowns();
+  const cooling = wouldNag && (cooldowns[cooldownKey(trigger, url)] || 0) > Date.now();
+
+  // Time on a page that WOULD nag counts against the budget, even while cooling down.
+  const usage = await loadUsage();
+  const budgetMin = (wouldNag && s.budgets && s.budgets[trigger]) || 0;
+  const counts = wouldNag && budgetMin > 0;
+  const overBudget = counts && (usage.seconds[trigger] || 0) >= budgetMin * 60;
+  if (overBudget) note = `You've used your ${budgetMin} min of ${trigger} for today.`;
+
+  const suppress = !wouldNag || cooling;
   const msg = suppress
-    ? { type: "hide" }
-    : { type: "show", goals: s.goals, delaySeconds: s.delaySeconds, domain: trigger, cooldownMinutes: s.cooldownMinutes, note };
+    ? { type: "hide", track: counts }
+    : {
+        type: "show",
+        goals: s.goals,
+        delaySeconds: escalatedDelay(s, usage.continues[trigger] || 0),
+        domain: trigger,
+        cooldownMinutes: overBudget ? 5 : s.cooldownMinutes,
+        note,
+        requireReason: s.requireReason,
+        minReasonChars: s.minReasonChars,
+        track: counts,
+      };
 
   try {
     await browser.tabs.sendMessage(tabId, msg);
@@ -97,9 +157,9 @@ function youtubeKey(url) {
   return "yt:home";
 }
 
-async function youtubeVerdict(tabId, url, s, cooldowns) {
+// Pure verdict; cooldowns are applied afterwards by evaluate().
+async function youtubeVerdict(tabId, url, s) {
   const u = new URL(url);
-  if ((cooldowns[youtubeKey(url)] || 0) > Date.now()) return { nag: false };
   if (u.pathname === "/") return { nag: true, note: "The home feed is the rabbit hole." };
   if (u.pathname.startsWith("/shorts/")) return { nag: true, note: "Shorts." };
   if (u.pathname !== "/watch" || !u.searchParams.get("v")) return { nag: false };
@@ -276,40 +336,98 @@ browser.tabs.onActivated.addListener(async ({ tabId }) => {
   evaluate(tabId, tab.url);
 });
 
-async function bump(stat, domain) {
-  const s = await loadSettings();
-  s.stats[stat] = (s.stats[stat] || 0) + 1;
-  const d = (s.stats.byDomain[domain] ||= { shown: 0, continued: 0, closed: 0 });
+// Callers hold the lock. Stats are local-only, so this never touches sync.
+async function bumpRaw(stat, domain) {
+  const stats = await loadStats();
+  stats[stat] = (stats[stat] || 0) + 1;
+  const d = (stats.byDomain[domain] ||= { shown: 0, continued: 0, closed: 0 });
   d[stat] = (d[stat] || 0) + 1;
-  await saveSettings(s);
+  await saveStats(stats);
+}
+
+function bump(stat, domain) {
+  return withLock(() => bumpRaw(stat, domain));
+}
+
+const REASON_LOG_CAP = 200;
+
+function handleContinue(msg) {
+  const reason = typeof msg.reason === "string" ? msg.reason.trim() : "";
+  return withLock(async () => {
+    await setCooldownRaw(cooldownKey(msg.domain, msg.url), Date.now() + msg.cooldownMinutes * 60 * 1000);
+    await bumpRaw("continued", msg.domain);
+
+    // Escalation counts "Continue anyway" per site (domain), not per video.
+    const usage = await loadUsage();
+    usage.continues[msg.domain] = (usage.continues[msg.domain] || 0) + 1;
+    await browser.storage.local.set({ usage });
+
+    if (reason) {
+      const log = await loadReasons();
+      log.push({ t: Date.now(), domain: msg.domain, reason });
+      await browser.storage.local.set({ reasonLog: log.slice(-REASON_LOG_CAP) });
+    }
+  });
+}
+
+// Heartbeat from a page that counts against a daily budget.
+async function handleTick(msg, sender) {
+  const tab = sender.tab;
+  if (!tab || tab.id == null || !tab.url || !/^https?:/.test(tab.url)) return;
+  const seconds = Math.min(30, Number(msg.seconds));
+  if (!(seconds > 0)) return;
+
+  const s = await loadSettings();
+  const c = await classify(tab.id, tab.url, s);
+  if (!c || !c.wouldNag) return;
+  const { trigger } = c;
+  const budgetMin = s.budgets && s.budgets[trigger];
+  if (!(budgetMin > 0)) return;
+
+  const limit = budgetMin * 60;
+  let over = false;
+  await withLock(async () => {
+    const usage = await loadUsage(); // a stale date reads as empty, so a new day starts clean
+    const before = usage.seconds[trigger] || 0;
+    const after = before + seconds;
+    usage.seconds[trigger] = after;
+    await browser.storage.local.set({ usage });
+    over = after >= limit;
+    // Crossing the limit voids any cooldown, so the overlay comes straight back.
+    if (before < limit && over) await clearCooldownRaw(cooldownKey(trigger, tab.url));
+  });
+  if (over) await evaluate(tab.id, tab.url);
 }
 
 browser.runtime.onMessage.addListener((msg, sender) => {
   const tabId = sender.tab && sender.tab.id;
+  const guard = (p) => p.catch((e) => console.warn("Goal Nudge:", e));
   switch (msg.type) {
     case "ready":
-      if (tabId != null) evaluate(tabId, sender.tab.url);
+      if (tabId != null) guard(evaluate(tabId, sender.tab.url));
       break;
     case "shown":
-      bump("shown", msg.domain);
+      guard(bump("shown", msg.domain));
       break;
     case "continue":
-      // YouTube is judged per video, so "continue" only clears that video (or the home feed / Shorts),
-      // never the whole site.
-      setCooldown(msg.domain === "youtube.com" ? youtubeKey(msg.url) : msg.domain,
-        Date.now() + msg.cooldownMinutes * 60 * 1000);
-      bump("continued", msg.domain);
+      guard(handleContinue(msg));
+      break;
+    case "tick":
+      guard(handleTick(msg, sender));
       break;
     case "close":
-      bump("closed", msg.domain);
+      guard(bump("closed", msg.domain));
       if (tabId != null) browser.tabs.remove(tabId);
       break;
     case "recheck":
       // Settings changed (popup/options) — re-evaluate the active tab.
-      browser.tabs.query({ active: true, currentWindow: true }).then(([t]) => t && evaluate(t.id, t.url));
+      guard(browser.tabs.query({ active: true, currentWindow: true }).then(([t]) => t && evaluate(t.id, t.url)));
       break;
   }
 });
 
 // Verdicts depend on the rules above; start fresh whenever the extension is (re)loaded.
-browser.runtime.onInstalled.addListener(() => browser.storage.local.remove("ytVerdicts"));
+browser.runtime.onInstalled.addListener(() => {
+  browser.storage.local.remove("ytVerdicts");
+  loadSettings().catch(() => {}); // runs the legacy -> sync/local split migration up front
+});
