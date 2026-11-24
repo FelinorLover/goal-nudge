@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Goal Nudge — settings</title>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    body { max-width: 640px; margin: 0 auto; padding: 32px 20px 60px; }
+    #saved { color: #34d399; margin-left: 10px; opacity: 0; transition: opacity 200ms; }
+    #saved.on { opacity: 1; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    td, th { text-align: left; padding: 4px 8px; border-bottom: 1px solid #1f2937; }
+    th { color: #9ca3af; font-weight: 500; }
+  </style>
+</head>
+<body>
+  <h1>Goal Nudge</h1>
+  <p class="hint">Everything is stored locally in this browser.</p>
+
+  <h2>Goals</h2>
+  <p class="hint">One per line. These are what the overlay shows you.</p>
+  <textarea id="goals"></textarea>
+
+  <h2>Distracting sites</h2>
+  <p class="hint">One hostname per line. Subdomains match automatically (youtube.com covers m.youtube.com).</p>
+  <textarea id="triggers"></textarea>
+
+  <h2>Always allow</h2>
+  <p class="hint">One URL fragment per line — any address containing it is never nagged, e.g. <code>youtube.com/@SomeChannel</code> or <code>reddit.com/r/learnprogramming</code>.</p>
+  <textarea id="allow"></textarea>
+
+  <h2>Smart YouTube</h2>
+  <p class="hint">Watch pages are judged before nagging: tutorials, lectures and anything mentioning your goals pass
+    through; entertainment gets the overlay. Uses YouTube's own category and keywords — free, no account needed.
+    The home feed and Shorts always nag; search, channel and playlist pages never do. Verdicts are cached per video.</p>
+  <label class="inline"><input type="checkbox" id="smartYouTube"> Enabled</label>
+  <div class="row" style="margin-top:8px">
+    <div><p class="hint">Claude API key (optional — sharper judgement, costs a fraction of a cent per video)</p><input type="password" id="apiKey" placeholder="leave blank to use the free heuristic" autocomplete="off"></div>
+    <div><p class="hint">Model</p><input type="text" id="model"></div>
+  </div>
+
+  <h2>Desktop watcher</h2>
+  <p class="hint">Only applies while <code>GoalNudgeWatcher</code> is running. Steam apps whose genres are all
+    creative-tool genres (Blender, Aseprite…) are skipped automatically.</p>
+  <label class="inline"><input type="checkbox" id="watchDiscordVoice"> Discord voice calls</label>
+  <label class="inline"><input type="checkbox" id="watchSteam"> Games</label>
+  <p class="hint" style="margin-top:12px">Never nag these Steam apps — one app ID or name fragment per line.</p>
+  <textarea id="steamAllow" style="min-height:64px"></textarea>
+  <p class="hint" style="margin-top:12px">Non-Steam games to watch for — one exe name per line.</p>
+  <textarea id="games" style="min-height:64px"></textarea>
+
+  <h2>Timing</h2>
+  <div class="row">
+    <div>
+      <p class="hint">Seconds before "Continue anyway" unlocks</p>
+      <input type="number" id="delaySeconds" min="0" max="120">
+    </div>
+    <div>
+      <p class="hint">Minutes a site stays quiet after you continue</p>
+      <input type="number" id="cooldownMinutes" min="1" max="1440">
+    </div>
+  </div>
+
+  <h2>Only nag during these hours</h2>
+  <label class="inline"><input type="checkbox" id="whEnabled"> Enabled</label>
+  <div class="row" style="margin-top:8px">
+    <div><p class="hint">From</p><input type="time" id="whStart"></div>
+    <div><p class="hint">Until</p><input type="time" id="whEnd"></div>
+  </div>
+  <div id="days" style="margin-top:8px"></div>
+
+  <div style="margin-top:28px">
+    <button id="save">Save</button><span id="saved">Saved</span>
+  </div>
+
+  <h2>Stats</h2>
+  <p id="totals" class="hint"></p>
+  <table id="byDomain"></table>
+  <button class="ghost" id="resetStats" style="margin-top:8px">Reset stats</button>
+
+  <script src="defaults.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

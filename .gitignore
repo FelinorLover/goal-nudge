@@ -1,0 +1,8 @@
+# Per-user state — goals, pause, Steam tool-type cache.
+watcher/config.json
+
+# Build output
+dist/
+watcher/build/
+__pycache__/
+*.pyc

@@ -1,0 +1,40 @@
+{
+  "manifest_version": 2,
+  "name": "Goal Nudge",
+  "version": "0.3.0",
+  "description": "Write down your goals. When you open a distracting site, it asks whether you'd rather work towards them.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "goal-nudge@local.extension",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "permissions": ["storage", "tabs", "<all_urls>"],
+  "background": {
+    "scripts": ["defaults.js", "background.js"],
+    "persistent": false
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "run_at": "document_idle",
+      "js": ["content.js"]
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_title": "Goal Nudge",
+    "default_icon": "icon.svg"
+  },
+  "icons": {
+    "48": "icon.svg",
+    "96": "icon.svg"
+  }
+}
