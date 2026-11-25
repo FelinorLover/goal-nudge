@@ -36,6 +36,12 @@ full-page overlay shows the goals and asks whether you'd rather work on them.
   ~250 tokens a video). Home feed and Shorts always nag; search, channel and
   playlist pages never do. Verdicts are cached per video.
 
+## Install
+
+- **Firefox / Zen** — [Add to Firefox](https://addons.mozilla.org/firefox/addon/goal-nudge/) (signed by Mozilla, updates automatically).
+- **Chrome / Edge / Brave** — download `goal-nudge-chrome.zip` from the [latest release](https://github.com/FelinorLover/goal-nudge/releases/latest), unzip, then see [Chrome / Edge / Brave](#chrome--edge--brave) below.
+- **Windows desktop watcher** (games + Discord calls, optional) — `GoalNudgeWatcher.exe` on the same release page.
+
 ## Chrome / Edge / Brave
 
 `manifest.chrome.json` is the Manifest V3 version of the same extension; the
